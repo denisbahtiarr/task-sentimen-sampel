@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Label customer feedback with sentiment, topic, and severity, then split
-out the high/critical rows for triage.
+out the high/critical rows for triage: draft an escalation reply for the
+support lead and log the remaining rows to a file.
 
 Usage:
     python src/label_feedback.py [--input data/feedback.csv] [--outdir output]
+        [--recipient support-lead@example.com]
 """
 
 import argparse
 import csv
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # --- Sentiment -------------------------------------------------------------
@@ -133,10 +136,85 @@ def write_csv(path: Path, rows, fieldnames):
         writer.writerows(rows)
 
 
+# --- Escalation email -------------------------------------------------------
+
+def build_escalation_email(rows, recipient: str) -> tuple[str, str]:
+    """Draft a reply summarizing high/critical rows for the support lead.
+
+    Returns (subject, body). Does not send anything itself.
+    """
+    subject = f"[Action needed] {len(rows)} high/critical feedback escalation(s)"
+
+    if not rows:
+        body = (
+            f"Hi,\n\nNo high or critical severity feedback was found in this "
+            f"batch. No action needed.\n\n-- Automated feedback triage"
+        )
+        return subject, body
+
+    lines = [
+        "Hi,",
+        "",
+        f"{len(rows)} feedback item(s) came in at high or critical severity "
+        "and need support follow-up:",
+        "",
+    ]
+    for row in rows:
+        lines.append(
+            f"- [{row['severity'].upper()}] {row.get('name', 'Unknown')} "
+            f"({row.get('date', 'n/a')}, {row.get('channel', 'n/a')}) "
+            f"- topic: {row.get('topic', 'n/a')}, sentiment: {row.get('sentiment', 'n/a')}"
+        )
+        lines.append(f"  \"{row.get('message', '')}\"")
+        lines.append(f"  reply-to: {row.get('email', 'n/a')}")
+        lines.append("")
+
+    lines.append("Please prioritize the critical items first.")
+    lines.append("")
+    lines.append("-- Automated feedback triage")
+    body = "\n".join(lines)
+    return subject, body
+
+
+def draft_escalation_email(rows, recipient: str, outdir: Path) -> Path:
+    subject, body = build_escalation_email(rows, recipient)
+    path = outdir / "escalation_email.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        f.write(f"To: {recipient}\n")
+        f.write(f"Subject: {subject}\n")
+        f.write("\n")
+        f.write(body)
+        f.write("\n")
+    return path
+
+
+# --- Logging ----------------------------------------------------------------
+
+def write_log(rows, path: Path):
+    """Log the non-escalation (low/medium severity) rows to a plain-text file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with path.open("w", encoding="utf-8") as f:
+        f.write(f"# Feedback log generated {timestamp}\n")
+        f.write(f"# {len(rows)} low/medium severity row(s)\n\n")
+        for row in rows:
+            f.write(
+                f"[{row['severity']}] id={row.get('id', 'n/a')} "
+                f"topic={row['topic']} sentiment={row['sentiment']} "
+                f"date={row.get('date', 'n/a')} channel={row.get('channel', 'n/a')} "
+                f"message=\"{row.get('message', '')}\"\n"
+            )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", default="data/feedback.csv", type=Path)
     parser.add_argument("--outdir", default="output", type=Path)
+    parser.add_argument(
+        "--recipient", default="support-lead@example.com",
+        help="Support lead email address the escalation draft is addressed to.",
+    )
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -156,10 +234,16 @@ def main():
     write_csv(args.outdir / "high_critical_feedback.csv", urgent, fieldnames)
     write_csv(args.outdir / "other_feedback.csv", rest, fieldnames)
 
+    email_path = draft_escalation_email(urgent, args.recipient, args.outdir)
+    log_path = args.outdir / "feedback_log.txt"
+    write_log(rest, log_path)
+
     print(f"Labeled {len(labeled)} rows.")
     print(f"  high/critical: {len(urgent)} -> {args.outdir / 'high_critical_feedback.csv'}")
     print(f"  low/medium:    {len(rest)} -> {args.outdir / 'other_feedback.csv'}")
     print(f"  all rows:      {args.outdir / 'labeled_feedback.csv'}")
+    print(f"  escalation email draft ({len(urgent)} item(s)) -> {email_path}")
+    print(f"  low/medium log ({len(rest)} item(s)) -> {log_path}")
 
 
 if __name__ == "__main__":
