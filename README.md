@@ -37,13 +37,22 @@ pada tiap baris berdasarkan aturan kata kunci, lalu memisahkan baris dengan
 severity high/critical dari sisanya.
 
 ```bash
-python3 src/label_feedback.py --input data/feedback.csv --outdir output
+python3 src/label_feedback.py --input data/feedback.csv --outdir output \
+    --recipient support-lead@example.com
 ```
 
 Output yang dihasilkan di `output/`:
 - `labeled_feedback.csv` — semua baris dengan label lengkap
 - `high_critical_feedback.csv` — baris severity high & critical (butuh perhatian segera)
 - `other_feedback.csv` — baris severity low & medium
+- `escalation_email.txt` — draf balasan email ke support lead untuk baris severity high/critical (draf saja, skrip tidak mengirim email)
+- `feedback_log.txt` — log teks untuk baris severity low/medium
+
+## Testing
+
+```bash
+python3 -m unittest discover -s tests
+```
 
 ## Kontribusi
 
